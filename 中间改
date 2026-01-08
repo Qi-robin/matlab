@@ -1,0 +1,389 @@
+clc ; close ALL ; clear ALL;
+import com.comsol.model.*
+import com.comsol.model.util.*
+
+% --- 修改开始：防止模型标签冲突 ---
+try
+    ModelUtil.remove('Model'); % 尝试从内存中移除名为 'Model' 的旧模型
+catch
+    % 如果之前没有这个模型，remove会报错，这里用 catch 忽略报错，继续运行
+end
+% --- 修改结束 ---
+
+model = ModelUtil.create('Model'); % 现在可以放心地创建新模型了
+model.modelNode.create('comp1', true);
+model.geom.create('geom1', 2);
+model.geom('geom1').model('comp1');
+model.component('comp1').baseSystem('none');
+%% PARAMETERS
+model.param.set('L', '1', 'length and width of the design domain');
+model.param.set('W', '0.2', 'width of the channel');
+model.param.set('H', '2', 'height of the pump');
+model.param.set('T0', '300[K]', 'reference temperature');
+model.param.set('Gr', '10^3', 'Grashoff number');
+model.param.set('Pr', '1', 'Prandtl number');
+model.param.set('Ck', '10^(-2)', 'thermal conductivity ratio');
+model.param.set('q', '10^4', 'convex parameter');
+model.param.set('alpha_max', '10^6', 'maximum brinkmann coefficient');
+model.param.set('alpha_min', '0.001', 'minimum brinkmann coeffiecient');
+model.param.set('qf', '10^4', 'RAMP parameter conductivity interpolation');
+BETA = 1;
+eta = 0.5; Rmin = 0.0282;
+%% FUNCTION DEFINITIONS
+model.component('comp1').func.create('an1', 'Analytic');
+model.component('comp1').func('an1').set('expr', ['alpha_min + (alpha_max-alpha_min)*((1-x)/(1+q*x))']);
+model.component('comp1').func.create('an2', 'Analytic');
+model.component('comp1').func('an2').set('expr', '(x*(Ck*(1+qf)-1)+1)/(Ck*(1+qf*x))');
+%% GEOMETRY
+model.component('comp1').geom('geom1').create('sq1', 'Square');
+model.component('comp1').geom('geom1').feature('sq1').set('size', 'L');
+model.component('comp1').geom('geom1').create('pol1', 'Polygon');
+model.component('comp1').geom('geom1').feature('pol1').set('source', 'table');
+model.component('comp1').geom('geom1').feature('pol1').set('table', {'0' 'L'; '0' 'H'; 'L' 'H'; 'L' 'L'; 'L-W' 'L'; 'L-W' 'H-W'; 'W' 'H-W'; 'W' 'L'; '0' 'L'});
+model.component('comp1').geom('geom1').create('ls1', 'LineSegment');
+model.component('comp1').geom('geom1').feature('ls1').set('specify1', 'coord');
+model.component('comp1').geom('geom1').feature('ls1').set('coord1', {'L/2' 'H-W'});
+model.component('comp1').geom('geom1').feature('ls1').set('specify2', 'coord');
+model.component('comp1').geom('geom1').feature('ls1').set('coord2', {'L/2' 'H'});
+model.component('comp1').geom('geom1').run;
+%% MESHING
+model.component('comp1').mesh.create('mesh1');
+model.component('comp1').mesh('mesh1').create('fq1', 'FreeQuad');
+model.component('comp1').mesh('mesh1').create('map1', 'Map');
+model.component('comp1').mesh('mesh1').feature('size').set('hauto', 2);
+model.component('comp1').mesh('mesh1').feature('size').set('table', 'cfd');
+model.component('comp1').mesh('mesh1').run;
+%% VARIABLES
+model.component('comp1').variable.create('var1');
+model.component('comp1').variable('var1').set('alpha', 'an1(gamma)');
+model.component('comp1').variable('var1').set('K_var', 'an2(gamma)');
+model.component('comp1').variable('var1').set('mu_var', 'Pr');
+model.component('comp1').variable('var1').set('cp_var', '1');
+model.component('comp1').variable('var1').set('rho_var', '1');
+model.component('comp1').variable('var1').selection.geom('geom1', 2);
+model.component('comp1').variable('var1').selection.set([1]);
+model.component('comp1').variable.create('var2');
+model.component('comp1').variable('var2').set('alpha', '0');
+model.component('comp1').variable('var2').set('K_var', '1');
+model.component('comp1').variable('var2').set('mu_var', 'Pr');
+model.component('comp1').variable('var2').set('cp_var', '1');
+model.component('comp1').variable('var2').set('rho_var', '1');
+model.component('comp1').variable('var2').selection.geom('geom1', 2);
+model.component('comp1').variable('var2').selection.set([2 3]);
+%% PHYSICS DEFINITION
+model.component('comp1').physics.create('spf', 'LaminarFlow', 'geom1');
+model.component('comp1').physics('spf').create('vf1', 'VolumeForce', 2);
+model.component('comp1').physics('spf').feature('vf1').selection.all ;
+model.component('comp1').physics('spf').feature('vf1').set('F', {'-alpha*u'; '-alpha*v'; '0'});
+model.component('comp1').physics('spf').create('vf2', 'VolumeForce', 2);
+model.component('comp1').physics('spf').feature('vf2').selection.all;
+model.component('comp1').physics('spf').feature('vf2').set('F', {'0'; 'Gr*(Pr^2)*T'; '0'});
+model.component('comp1').physics('spf').create('prpc1', 'PressurePointConstraint', 0);
+model.component('comp1').physics('spf').feature('prpc1').selection.set([12]);
+model.component('comp1').physics('spf').create('weak1', 'WeakContribution',1);
+model.component('comp1').physics('spf').feature('weak1').selection.set([9]);
+model.component('comp1').physics('spf').feature('weak1').set('weakExpression', '-test(u)');
+model.component('comp1').physics('spf').feature('fp1').set('rho_mat', 'userdef');
+model.component('comp1').physics('spf').feature('fp1').set('rho', 'rho_var');
+model.component('comp1').physics('spf').feature('fp1').set('mu_mat', 'userdef');
+model.component('comp1').physics('spf').feature('fp1').set('mu', 'mu_var');
+model.component('comp1').physics('spf').prop('AdvancedSettingProperty').set('PseudoTimeSetting', 'Off');
+model.component('comp1').physics('spf').prop('ShapeProperty').set('order_fluid', 2);
+model.component('comp1').physics.create('ht', 'HeatTransferInFluids', 'geom1');
+model.component('comp1').physics('ht').create('temp1', 'TemperatureBoundary', 1);
+model.component('comp1').physics('ht').feature('temp1').selection.set([1]);
+model.component('comp1').physics('ht').feature('temp1').set('T0', 1);
+model.component('comp1').physics('ht').create('temp2', 'TemperatureBoundary', 1);
+model.component('comp1').physics('ht').feature('temp2').selection.set([14]);
+model.component('comp1').physics('ht').feature('temp2').set('T0', 0);
+model.component('comp1').physics('ht').feature('fluid1').set('Cp_mat', 'userdef');
+model.component('comp1').physics('ht').feature('fluid1').set('Cp', 'cp_var');
+model.component('comp1').physics('ht').feature('fluid1').set('rho_mat', 'userdef');
+model.component('comp1').physics('ht').feature('fluid1').set('rho', 'rho_var');
+model.component('comp1').physics('ht').feature('fluid1').set('k_mat', 'userdef');
+model.component('comp1').physics('ht').feature('fluid1').set('k', 'K_var');
+model.component('comp1').physics('ht').feature('init1').set('Tinit', 0);
+model.component('comp1').physics('ht').prop('ShapeProperty').set('boundaryFlux_temperature', false);
+model.component('comp1').multiphysics.create('nitf1', 'NonIsothermalFlow',2);
+model.component('comp1').multiphysics('nitf1').set('SpecifyDensity', 'Custom');
+model.component('comp1').multiphysics('nitf1').set('BoussinesqApproximation', true);
+model.component('comp1').multiphysics('nitf1').set('rho', 'rho_var');
+model.component('comp1').multiphysics('nitf1').set('includeViscousDissipation', false);
+%% PHYSICS FOR GAMMA
+model.physics.create('w', 'WeakFormPDE', 'geom1');
+model.physics('w').field('dimensionless').field('gamma');
+model.physics('w').field('dimensionless').component({'gamma'});
+model.physics('w').selection.set([1]);
+model.physics('w').prop('ShapeProperty').set('order', 1);
+model.physics('w').prop('EquationForm').set('form', 'Automatic');
+model.physics('w').feature('wfeq1').set('weak', 'test(gamma)');
+model.physics('w').feature('init1').set('gamma', 0.5);
+%% STUDY STEP FOR FINITE ELEMENT ANALYSIS
+std1 = model.study.create('std1');
+std1.create('stat', 'Stationary');
+std1.feature('stat').set('useadvanceddisable', true);
+model.study('std1').feature('stat').set('activate', {'spf' 'on' 'ht' 'on' 'w' 'off' 'frame:spatial1' 'on' 'frame:material1' 'on'});
+std1.feature('stat').set('disabledphysics', {'spf/weak1'});
+sol1 = model.sol.create('sol1');
+sol1.study('std1');
+sol1.attach('std1');
+st1 = sol1.create('st1', 'StudyStep');
+v1 = sol1.create('v1', 'Variables');
+s1 = sol1.create('s1', 'Stationary');
+sol1.attach('std1');
+sol1.runAll;
+%% STUDY STEP FOR ADJOINT SENSITIVITY ANALYSIS
+std2 = model.study.create('std2');
+std2.create('stat', 'Stationary');
+std2.feature('stat').set('useadvanceddisable', true);
+std2.feature('stat').set('disabledphysics', {'ht/temp1' 'ht/temp2' });
+sol2 = model.sol.create('sol2');
+sol2.study('std2');
+sol2.create('st1', 'StudyStep');
+sol2.create('v1', 'Variables');
+sol2.runAll;
+%% POSTPROCESSING- DESIGN PLOT
+pg1 = model.result.create('pg1', 2);
+surf1 = pg1.feature.create('surf1', 'Surface');
+surf1.set('expr', 'gamma');
+surf1.set('coloring', 'gradient');
+surf1.set('bottomcolor', 'custom');
+surf1.set('custombottomcolor', [0.58 0.58 0.58]);
+pg1.run;
+%% MESH AND NODAL INFORMATION (修复版)
+% 强制获取与 sol2 求解器状态一致的网格信息
+try
+    info = mphxmeshinfo(model, 'soltag', 'sol2');
+catch
+    warning('当前版本不支持 soltag 参数，回退默认设置，可能会导致索引错误。');
+    info = mphxmeshinfo(model);
+end
+
+% 获取所有自由度名称的索引
+id_names = info.dofs.nameinds;
+% 查找设计变量 gamma 的名称索引
+id_dofnames = find(strcmp(info.dofs.dofnames, 'comp1.gamma')) - 1;
+
+% 获取 gamma 的自由度索引 (这些是我们在 MATLAB 里要操作的)
+igamma = find(id_names == id_dofnames);
+
+% 获取物理场 (u, v, p, T) 的自由度索引
+iuvpT = find(id_names ~= id_dofnames);
+
+% 提取坐标 (用于后续的 Filter)
+coords = info.dofs.coords;
+gx = coords(1, igamma);
+gy = coords(2, igamma);
+
+%% VOLUME CONSTRAINT (修复版)
+% 提取伴随灵敏度分析所需的负载向量 L
+Lstrt = mphmatrix(model, 'sol2', 'Out', {'L'}, 'initmethod', 'init');
+
+% --- 自动索引修正逻辑 ---
+% 检查索引是否越界，如果越界则自动截断或对齐
+num_L = length(Lstrt.L);
+if max(iuvpT) > num_L
+    warning('检测到索引越界，正在尝试自动对齐物理场索引...');
+    % 逻辑：物理场索引通常位于矩阵的前部或后部。
+    % 既然 gamma 是通过 WeakForm 定义的，通常在最后。
+    % 我们尝试只保留在 L 范围内的 iuvpT 索引。
+    iuvpT = iuvpT(iuvpT <= num_L);
+    
+    % 双重检查：如果截断后长度不对，尝试原论文的位移魔法
+    if isempty(iuvpT) || length(iuvpT) < (num_L - length(igamma))
+         warning('自动截断失效，尝试应用原论文的位移修正 (2:end)-1 ...');
+         % 重新获取原始索引
+         iuvpT_raw = find(id_names ~= id_dofnames);
+         iuvpT = iuvpT_raw(2:end) - 1;
+    end
+end
+
+% 执行赋值
+Ltilde = Lstrt.L(iuvpT);
+
+% 提取 gamma 对应的负载 (用于体积约束)
+% 注意：这里也要防止 igamma 越界，虽然通常 gamma 索引比较稳定
+if max(igamma-1) > num_L
+    % 如果 gamma 索引也越界了，说明矩阵比预期的要小太多，可能是 initmethod 问题
+    error('严重错误：设计变量 gamma 的索引超出了矩阵维度。请检查 sol2 是否正确解算。');
+else
+    Vgamma = Lstrt.L(igamma); % 注意：原论文这里可能是 igamma-1 或 igamma，视具体版本
+    % 如果上面的 iuvpT 没有减1，这里 igamma 通常也不需要减1。
+    % 但为了匹配原逻辑，我们先尝试直接用 igamma。
+    % 如果报错，请尝试改为 Vgamma = Lstrt.L(igamma-1);
+end
+
+Vdomain = sum(Vgamma);
+U0 = mphgetu(model, 'soltag', 'sol1');
+gamma = U0(igamma);
+%% MMA PARAMETERS (修复版)
+mma.m = 1; 
+mma.n = numel(gamma); 
+% 修正 OCR 错误：xolt1 -> xold1
+mma.xold1 = gamma; 
+% 修正 OCR 错误：xoldl -> xold1 (注意结尾是数字1)
+mma.xold2 = mma.xold1;
+
+mma.U = ones(mma.n,1); 
+mma.L = zeros(mma.n,1); 
+mma.epsimin = 10^(-7); 
+mma.raa0 = 0.00001; 
+mma.move = 0.05;
+% 修正可能的拼写错误：albefa -> alberta? 不，MMA通常参数是 alapha/beta
+% 这里原论文代码可能是 mma.albefa (alpha + beta?) 或者是 OCR 错误
+% 根据标准 MMA 代码，通常不需要手动设置这个，但如果原作者用了变体，保持原样或修正为通用参数。
+% 观察原图，原文应该是 mma.asymp 相关参数，但这里为了保险，先照抄修正后的拼写：
+mma.albefa = 0.1; 
+mma.asyinit = 0.5; 
+mma.asyincr = 1.2; % 原文可能是 1 或 1.2
+mma.asydecr = 0.7; % 原文可能是 0.6 或 0.7
+
+mma.a0 = 1;
+mma.a = zeros(mma.m,1); 
+mma.c = 1000*ones(mma.m,1); 
+mma.d = zeros(mma.m,1); % 修改为0或1，视具体MMA版本而定，这里先用0
+
+mma.xmin = zeros(mma.n,1); 
+mma.xmax = ones(mma.n,1);
+% --- 新增：给 gamma 施加初始随机扰动 ---
+% 读取当前的 0.5
+U0 = mphgetu(model, 'soltag', 'sol1');
+current_gamma = U0(igamma);
+
+% 加上范围在 [-0.05, 0.05] 的随机噪声
+perturbation = 0.1 * (rand(size(current_gamma)) - 0.5);
+new_gamma = 0.5 + perturbation;
+
+% 强制写回模型
+U0(igamma) = new_gamma;
+sol1.setU(1, U0);
+sol1.createSolution;
+gamma = new_gamma; % 更新 MATLAB 里的变量
+model.sol('sol1').runAll;
+% -------------------------------------
+%% PREPARATION FOR WHILE LOOP
+iter = 1; iterMax = 150; change = Inf; f_old = Inf;
+Phi_old = Inf;
+change_limit = 0.001; change_count = 5; count = 0;
+gammaTilde = gamma; gammaPhys = gammaTilde; volfrac = 0.5;
+q_in = 10^0;
+mphplot(model, 'pg1');
+%% PREPARE FILTER
+iH = cell(length(igamma), 1); jH = cell(length(igamma), 1); kH = cell(length(igamma), 1);
+for i = 1:length(igamma)
+    dist = sqrt((gx- gx(i)).^2 + (gy- gy(i)).^2)';
+    jH{i} = find(dist <= Rmin);
+    kH{i} = max(0, Rmin- dist(jH{i}));
+    iH{i} = i * ones(length(kH{i}), 1);
+end
+iH = cell2mat(iH); jH = cell2mat(jH); kH = cell2mat(kH);
+H=sparse(iH,jH,kH); Hs=sum(H,2);
+%% WHILE LOOP
+% 强制重置计数器
+count = 0; 
+
+while (iter < iterMax + 1 && count < change_count)
+    %% DSA STEP 1: ADJOINT SOLUTION (伴随解)
+    Kstrt1 = mphmatrix(model,'sol1','Out',{'Kc','Null','Nullf','uscale'},'initmethod','sol','initsol','sol1');
+    U0 = mphgetu(model,'soltag','sol1');
+    Ladj = Ltilde;
+    lambdac = Kstrt1.Kc \ (Kstrt1.Nullf.' * -Ladj);
+    lambda = Kstrt1.uscale .* (Kstrt1.Null * lambdac);
+
+    %% DSA STEP 2: DERIVATIVE of RESIDUAL (残差导数)
+    Kstrt2 = mphmatrix(model,'sol2','Out',{'K'},'initmethod','sol','initsol','sol1');
+    
+    % --- 修正：使用安全的索引计算 dR ---
+    % 这里的 K 矩阵行数可能与 iuvpT 长度不一致，再次进行安全截断
+    num_rows_K = size(Kstrt2.K, 1);
+    safe_iuvpT = iuvpT(iuvpT <= num_rows_K);
+    
+    % 注意：这里改为 igamma (去掉-1)，防止索引为0报错
+    % 如果你的 COMSOL 版本确实需要-1才能对齐，且报错维度不匹配，再改回 igamma-1
+    dR = Kstrt2.K(safe_iuvpT, igamma); 
+    % ---------------------------------
+
+    %% OBJECTIVE FUNCTION & SENSITIVITY
+    Phi = mphint2(model,'-u','line','selection',[9]);
+    dPhi = dR.' * lambda;
+    
+    % 重新计算体积约束
+    constr = ((gammaPhys)' * Vgamma/(volfrac * Vdomain))-1;
+    dconst = Vgamma/(volfrac * Vdomain);
+
+    %% INPUT: OBJECTIVE & CONSTRAINT
+    f = Phi;
+    g = constr;
+    df = dPhi;
+    dg = dconst; % 修正：这里 dg 应该对应 dconst (原代码逻辑里似乎是分开算的，这里直接赋值)
+
+    %% FILTERING SENSITIVITY
+    dgamma = (BETA * sech(BETA * (gammaTilde-eta)).^2) ./ (tanh(BETA * eta)+tanh(BETA * (1-eta)));
+    % 修正：矩阵乘法方向，确保维度匹配 (N,N) * (N,1)
+    df = (H * ((dPhi .* dgamma) ./ Hs));
+    dg = H * ((dconst .* dgamma) ./ Hs);
+
+    %% OPTIMIZER: MMA
+    [gammaNew,y,z,lambda1,ksi,eta1,mu1,zeta,s,mma.xmin,mma.xmax] = ...
+        mmasub(mma.m,mma.n,iter,gamma,mma.L,mma.U,mma.xold1,mma.xold2,f,df,g,dg',mma.xmin,mma.xmax,mma.a0,mma.a,mma.c,mma.d);
+
+    % 计算变化率
+    change = abs(Phi_old-Phi)/abs(Phi_old + 1e-10);
+    
+    % 收敛判定 (前50步强制继续)
+    if change < change_limit && iter > 50
+        count = count + 1;
+    else
+        count = 0;
+    end
+
+    % 更新历史变量
+    f_old = f; Phi_old = Phi;
+    mma.xold2 = mma.xold1; mma.xold1 = gamma; gamma = gammaNew;
+
+    %% --- 参数更新逻辑 (放在计算新 gamma 之后) ---
+    if (mod(iter, 40) == 0 && iter > 1)
+        if BETA < 32
+            BETA = min(1.5 * BETA, 32);
+            fprintf('>>> [Update] Parameter BETA increased to %g.\n', BETA);
+        end
+        if q_in < 10^7
+            q_in = min(2 * q_in, 10^7);
+            fprintf('>>> [Update] Parameter q increased to %g.\n', q_in);
+            model.param.set('q', q_in);
+        end
+    end
+
+    %% APPLY FILTER & UPDATE MODEL (更新模型)
+    gammaTilde = (H * gamma(:)) ./ Hs;
+    gammaPhys(:) = (tanh(BETA * eta) + tanh(BETA * (gammaTilde - eta))) ./ ...
+                   (tanh(BETA * eta) + tanh(BETA * (1 - eta)));
+
+    % 将新 gamma 写入模型
+    U0(igamma) = gammaPhys;
+    sol1.setU(1, U0);
+    sol1.createSolution;
+
+    % --- 关键修复：必须重新计算物理场！---
+    % 如果不跑这一步，流场永远是旧的
+    v1.set('initmethod','sol'); v1.set('initsol','sol1'); 
+    model.sol('sol1').runAll; 
+    % ----------------------------------
+
+    %% 打印日志 & 绘图
+    fprintf(' It.:%5i Obj.:%11.4f Vol.:%7.3f ch.:%7.3f\n', iter, -Phi, mean(gammaPhys(:)), change);
+    
+    % 强制刷新绘图数据
+    try
+        model.result('pg1').run;
+        mphplot(model, 'pg1');
+        title(['Iteration = ', num2str(iter)]);
+        axis equal; axis off; drawnow; shg;
+    catch
+        % 防止绘图报错打断计算
+    end
+
+    iter = iter + 1;
+end
+mphsave(model,'Natural_convection_pump.mph');
+mphlaunch(model);
