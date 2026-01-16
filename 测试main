@@ -1,0 +1,109 @@
+% === Heat 案例极速测试版 ===
+clear all; clc;
+
+% 1. 路径配置 (复用之前的成功配置)
+addpath('D:\comsol\COMSOL63\Multiphysics\mli'); 
+py_path = 'D:\Anaconda\envs\py38\python.exe'; 
+
+% 2. 极速参数设置 (关键修改!)
+ratio=0.5; 
+iter=3;       % 只跑 3 轮
+n=5;          % 每轮只算 5 个样本
+n0=5;         % 初始也只算 5 个 (之前是 500)
+
+% === 【核心加速】降低网格精度 ===
+nx=5;         % 原来是 10，改成 5
+ny=5;         % 原来是 10，改成 5
+% ============================
+
+l=0.1; 
+d=l/nx/2; 
+nx_q=300; 
+ny_q=300; 
+qtotal=632080; 
+folder='data_solo_heat_test'; % 新建一个测试文件夹，避免和旧数据冲突
+if ~exist(folder, 'dir'); mkdir(folder); end
+
+base=[]; 
+results=zeros(iter,3);
+results(:,1)=(n:n:n*iter)';
+seed_train=3; 
+seed_opt=123; 
+
+% 3. 启动 COMSOL (串行)
+try
+    mphstart(2036);
+catch
+    fprintf('正在启动 COMSOL...\n');
+    system('start "" "D:\comsol\COMSOL63\Multiphysics\bin\win64\comsolmphserver.exe"');
+    pause(5);
+    mphstart;
+end
+
+% 4. 初始化
+[coords,~] = fun_gen_coord(nx,ny,l); 
+N=nx*ny;
+coord_list=reshape(coords(:,:,1:2),nx*ny,2);
+delta_xy=pdist2(coord_list,coord_list,'squaredeuclidean'); 
+A=zeros(N+3,N+3); 
+A(1:N,1:N)=exp(-delta_xy./d^2);
+A(1:N,N+1)=1; 
+A(1:N,N+2:end)=coord_list;
+A=triu(A)+triu(A,1)';
+[query,query_mask]=fun_gen_coord(nx_q,ny_q,l); 
+query_list=reshape(query,[],2);
+n_q=size(query_list,1);
+delta_xy=pdist2(query_list,coord_list,'squaredeuclidean'); 
+A_q=zeros(n_q,N+3); 
+A_q(:,1:N)=exp(-delta_xy./d^2);
+A_q(:,N+1)=1; 
+A_q(:,N+2:end)=query_list;
+query_mask_list=reshape(query_mask,[],1); 
+
+% 5. 主循环
+p=[0.2,0.1,0.2,0.2,0.2]; 
+fprintf('=== 开始 Heat 案例极速测试 (5x5网格) ===\n');
+
+for i=1:iter
+    fprintf('\n>>> 迭代 %d / %d \n', i, iter);
+    optfile=['./',folder,'/',num2str(n),'ntrain_opt_step',num2str(i),'.mat'];
+    trainfile=['./',folder,'/',num2str(n),'ntrain_train_step',num2str(i),'.mat'];
+    seed_gen=2+i;
+    
+    inputs = single(func_inputs_gen((i==1)*n0+(i>1)*n,nx,ny,seed_gen,base,p));
+    
+    fprintf('  正在计算物理场 (耗时稍长，请耐心)... ');
+    % 调用串行求解器 (确保你没有删掉 heat/func_outputs.m 里的修复补丁)
+    outputs = func_outputs(inputs,ratio,A,A_q,d,coord_list,query_mask_list,qtotal,0);
+    
+    % 清洗数据
+    inputs(outputs==Inf,:,:)=[];
+    outputs(outputs==Inf)=[];
+    fprintf('有效样本: %d\n', length(outputs));
+    
+    if i>1 
+        mydata=load(['./',folder,'/',num2str(n),'ntrain_train_step',num2str(i-1),'.mat']);
+        inputs=[mydata.inputs;inputs];
+        outputs=[mydata.outputs;outputs];
+    end    
+    save(trainfile,'inputs','outputs');
+    
+    fprintf('  正在调用 Python... ');
+    % 这里的 Python 参数格式与 Heat 案例保持一致
+    cmdstr = sprintf('"%s" -c "import mlopt; mlopt.func(None,''%s'',''%s'',%d,%d)"', ...
+             py_path, trainfile, optfile, seed_train, seed_opt);
+    [status, res] = system(cmdstr);
+    
+    if status ~= 0
+        fprintf('\n❌ Python 报错:\n%s\n', res);
+        break;
+    else
+        fprintf('完成!\n');
+    end
+    
+    % 验证结果
+    [results(i,2),results(i,3),base]= func_test(ratio,A,A_q,d,coord_list,query_mask_list,qtotal,optfile);
+    fprintf('  当前最优结果: %.4f\n', results(i,3));
+end
+save(['./',folder,'/','results'],'results');
+fprintf('\n✅✅✅ Heat 测试通关！\n');
